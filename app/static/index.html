@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Velocity predictor</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f5f4f1;
+    --surface-1: #fcfcfb;
+    --border: #e2e1dc;
+    --grid: #ecebe7;
+    --axis: #b9b8b1;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #7a7974;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --critical: #d03b3b;
+    --accent: #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #111110; --surface-1: #1a1a19; --border: #2e2e2c;
+      --grid: #262624; --axis: #4a4a46;
+      --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8e8d86;
+      --series-1: #3987e5; --series-2: #d95926; --accent: #3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #111110; --surface-1: #1a1a19; --border: #2e2e2c;
+    --grid: #262624; --axis: #4a4a46;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8e8d86;
+    --series-1: #3987e5; --series-2: #d95926; --accent: #3987e5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface-0); color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--text-secondary); margin: 0 0 20px; }
+  .layout { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px;
+  }
+  label { display: block; font-size: 12px; color: var(--text-secondary); margin: 12px 0 4px; }
+  label:first-child { margin-top: 0; }
+  textarea, input, select {
+    width: 100%; font: inherit; color: var(--text-primary); background: var(--surface-0);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+  }
+  textarea { height: 220px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; resize: vertical; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button {
+    font: inherit; border-radius: 6px; padding: 7px 12px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-0); color: var(--text-primary);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .buttons { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .error { color: var(--critical); font-size: 13px; margin-top: 10px; min-height: 1em; }
+  .hint { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  .charts { display: grid; gap: 16px; }
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .chart-head h2 { font-size: 15px; margin: 0; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .key-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--series-1); }
+  .key-line { width: 14px; height: 2px; border-radius: 1px; }
+  .plot { position: relative; margin-top: 8px; }
+  svg { display: block; width: 100%; height: 300px; overflow: visible; }
+  svg text { fill: var(--text-muted); font-size: 11px; }
+  .tooltip {
+    position: absolute; pointer-events: none; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.12); white-space: nowrap; color: var(--text-primary);
+  }
+  .tooltip .t { color: var(--text-secondary); margin-bottom: 2px; }
+  .tooltip .v { display: flex; align-items: center; gap: 6px; }
+  .empty { color: var(--text-muted); text-align: center; padding: 120px 0; }
+  details { margin-top: 4px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; }
+  .table-wrap { max-height: 300px; overflow: auto; margin-top: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); }
+  th { color: var(--text-secondary); position: sticky; top: 0; background: var(--surface-1); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Velocity predictor</h1>
+  <p class="sub">Paste x(t) measurements; the backend fits a smoothing spline and returns its derivative V<sub>x</sub>(t).</p>
+
+  <div class="layout">
+    <form class="card" id="form">
+      <label for="data">Data — one <code>t, x</code> pair per line</label>
+      <textarea id="data" spellcheck="false"></textarea>
+      <div class="hint">Comma, space or tab separated. Order doesn’t matter.</div>
+
+      <div class="row">
+        <div>
+          <label for="smoothing">Smoothing λ</label>
+          <input id="smoothing" type="number" min="0" step="any" placeholder="auto">
+        </div>
+        <div>
+          <label for="npoints">Output points</label>
+          <input id="npoints" type="number" min="2" max="10000" value="200">
+        </div>
+      </div>
+
+      <label for="sample">Sample data</label>
+      <select id="sample">
+        <option value="sine">x = sin(t) + noise</option>
+        <option value="fall">x = 20 − 4.9t² + noise (falling)</option>
+        <option value="damped">damped oscillation + noise</option>
+      </select>
+
+      <div class="buttons">
+        <button type="submit" class="primary">Predict Vx(t)</button>
+        <button type="button" id="gen">Generate sample</button>
+      </div>
+      <div class="error" id="error" role="alert"></div>
+    </form>
+
+    <div class="charts">
+      <section class="card">
+        <div class="chart-head">
+          <h2>Position x(t)</h2>
+          <div class="legend">
+            <span><i class="key-dot"></i>Measured</span>
+            <span><i class="key-line" style="background:var(--series-2)"></i>Smoothed fit</span>
+          </div>
+        </div>
+        <div class="plot" id="plot-x"><div class="empty">Run a prediction to see the plot</div></div>
+      </section>
+
+      <section class="card">
+        <div class="chart-head"><h2>Predicted velocity V<sub>x</sub>(t)</h2></div>
+        <div class="plot" id="plot-v"><div class="empty">—</div></div>
+        <details>
+          <summary>Show table</summary>
+          <div class="table-wrap" id="table"></div>
+        </details>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+const fmt = (v) => {
+  const a = Math.abs(v);
+  return a !== 0 && (a < 1e-3 || a >= 1e5) ? v.toExponential(2) : (+v.toPrecision(4)).toString();
+};
+
+// ---------- sample data ----------
+function gauss() { return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random()); }
+const SAMPLES = {
+  sine:   { range: [0, 2 * Math.PI], f: (t) => Math.sin(t), noise: 0.05 },
+  fall:   { range: [0, 2],           f: (t) => 20 - 4.9 * t * t, noise: 0.15 },
+  damped: { range: [0, 10],          f: (t) => 3 * Math.exp(-0.3 * t) * Math.cos(2 * t), noise: 0.08 },
+};
+function generate() {
+  const s = SAMPLES[$("sample").value];
+  const n = 80, lines = [];
+  for (let i = 0; i < n; i++) {
+    const t = s.range[0] + Math.random() * (s.range[1] - s.range[0]);
+    lines.push(`${t.toFixed(4)}, ${(s.f(t) + s.noise * gauss()).toFixed(4)}`);
+  }
+  $("data").value = lines.join("\n");
+}
+
+function parseData(text) {
+  const t = [], x = [];
+  text.split("\n").forEach((line, i) => {
+    line = line.trim();
+    if (!line || line.startsWith("#")) return;
+    const parts = line.split(/[\s,;]+/).filter(Boolean).map(Number);
+    if (parts.length !== 2 || parts.some((p) => !Number.isFinite(p))) {
+      throw new Error(`Line ${i + 1}: expected two numbers, got "${line}"`);
+    }
+    t.push(parts[0]); x.push(parts[1]);
+  });
+  if (t.length < 2) throw new Error("Need at least 2 data points.");
+  return { t, x };
+}
+
+// ---------- chart ----------
+function niceTicks(lo, hi, count = 5) {
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const step0 = (hi - lo) / count;
+  const mag = 10 ** Math.floor(Math.log10(step0));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= step0);
+  const ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) ticks.push(+v.toFixed(12));
+  return ticks;
+}
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+/** series: [{name, kind: "dots"|"line", color, t:[], y:[]}] */
+function drawChart(container, series, yName) {
+  container.innerHTML = "";
+  const W = container.clientWidth, H = 300;
+  const m = { top: 10, right: 12, bottom: 34, left: 52 };
+  const iw = W - m.left - m.right, ih = H - m.top - m.bottom;
+
+  const allT = series.flatMap((s) => s.t), allY = series.flatMap((s) => s.y);
+  let [y0, y1] = [Math.min(...allY), Math.max(...allY)];
+  const pad = (y1 - y0 || 1) * 0.08; y0 -= pad; y1 += pad;
+  const xt = niceTicks(Math.min(...allT), Math.max(...allT));
+  const yt = niceTicks(y0, y1);
+  const tMin = Math.min(...allT), tMax = Math.max(...allT);
+  y0 = Math.min(y0, yt[0]); y1 = Math.max(y1, yt[yt.length - 1]);
+  const sx = (t) => m.left + ((t - tMin) / (tMax - tMin || 1)) * iw;
+  const sy = (y) => m.top + ih - ((y - y0) / (y1 - y0)) * ih;
+
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": yName + " versus t" }, container);
+
+  // grid + axes (recessive)
+  yt.forEach((v) => {
+    el("line", { x1: m.left, x2: m.left + iw, y1: sy(v), y2: sy(v), stroke: "var(--grid)" }, svg);
+    el("text", { x: m.left - 8, y: sy(v) + 4, "text-anchor": "end" }, svg).textContent = fmt(v);
+  });
+  xt.filter((v) => v >= tMin - 1e-9 && v <= tMax + 1e-9).forEach((v) => {
+    el("text", { x: sx(v), y: m.top + ih + 18, "text-anchor": "middle" }, svg).textContent = fmt(v);
+  });
+  if (y0 < 0 && y1 > 0) el("line", { x1: m.left, x2: m.left + iw, y1: sy(0), y2: sy(0), stroke: "var(--axis)" }, svg);
+  el("line", { x1: m.left, x2: m.left + iw, y1: m.top + ih, y2: m.top + ih, stroke: "var(--axis)" }, svg);
+  el("text", { x: m.left + iw, y: H - 2, "text-anchor": "end" }, svg).textContent = "t";
+
+  // marks: lines under dots
+  [...series].sort((a, b) => (a.kind === "line" ? -1 : 1)).forEach((s) => {
+    if (s.kind === "line") {
+      const d = s.t.map((t, i) => `${i ? "L" : "M"}${sx(t).toFixed(1)},${sy(s.y[i]).toFixed(1)}`).join("");
+      el("path", { d, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    } else {
+      s.t.forEach((t, i) => el("circle", {
+        cx: sx(t), cy: sy(s.y[i]), r: 4, fill: s.color, "fill-opacity": 0.75,
+        stroke: "var(--surface-1)", "stroke-width": 1,
+      }, svg));
+    }
+  });
+
+  // hover layer: crosshair + tooltip
+  const cross = el("line", { y1: m.top, y2: m.top + ih, stroke: "var(--axis)", "stroke-dasharray": "3 3", visibility: "hidden" }, svg);
+  const marks = series.map((s) => el("circle", { r: 5, fill: s.color, stroke: "var(--surface-1)", "stroke-width": 2, visibility: "hidden" }, svg));
+  const tip = document.createElement("div");
+  tip.className = "tooltip"; tip.hidden = true; container.appendChild(tip);
+  const hit = el("rect", { x: m.left, y: m.top, width: iw, height: ih, fill: "transparent" }, svg);
+
+  const nearest = (arr, v) => {
+    let best = 0;
+    for (let i = 1; i < arr.length; i++) if (Math.abs(arr[i] - v) < Math.abs(arr[best] - v)) best = i;
+    return best;
+  };
+  hit.addEventListener("pointermove", (ev) => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) * (W / r.width);
+    const t = tMin + ((px - m.left) / iw) * (tMax - tMin);
+    const ref = series[series.length - 1];          // snap to the dense (last) series
+    const ti = ref.t[nearest(ref.t, t)];
+    cross.setAttribute("x1", sx(ti)); cross.setAttribute("x2", sx(ti)); cross.setAttribute("visibility", "visible");
+    let html = `<div class="t">t = ${fmt(ti)}</div>`;
+    series.forEach((s, k) => {
+      const i = nearest(s.t, ti);
+      if (s.kind === "dots" && Math.abs(sx(s.t[i]) - sx(ti)) > 12) { marks[k].setAttribute("visibility", "hidden"); return; }
+      marks[k].setAttribute("cx", sx(s.t[i])); marks[k].setAttribute("cy", sy(s.y[i]));
+      marks[k].setAttribute("visibility", "visible");
+      const key = s.kind === "dots" ? `<i class="key-dot" style="background:${s.color}"></i>`
+                                    : `<i class="key-line" style="background:${s.color}"></i>`;
+      html += `<div class="v">${key}${s.name}: <b>${fmt(s.y[i])}</b></div>`;
+    });
+    tip.innerHTML = html; tip.hidden = false;
+    const scale = r.width / W;
+    let left = sx(ti) * scale + 12;
+    if (left + tip.offsetWidth > r.width) left = sx(ti) * scale - tip.offsetWidth - 12;
+    tip.style.left = left + "px"; tip.style.top = (m.top * scale + 4) + "px";
+  });
+  hit.addEventListener("pointerleave", () => {
+    tip.hidden = true; cross.setAttribute("visibility", "hidden");
+    marks.forEach((c) => c.setAttribute("visibility", "hidden"));
+  });
+}
+
+// ---------- app ----------
+let last = null;
+function render() {
+  if (!last) return;
+  const { input, res } = last;
+  drawChart($("plot-x"), [
+    { name: "Measured", kind: "dots", color: "var(--series-1)", t: input.t, y: input.x },
+    { name: "Fit", kind: "line", color: "var(--series-2)", t: res.t, y: res.x_fit },
+  ], "x");
+  drawChart($("plot-v"), [
+    { name: "Vx", kind: "line", color: "var(--series-1)", t: res.t, y: res.vx },
+  ], "Vx");
+  $("table").innerHTML = "<table><thead><tr><th>t</th><th>x fit</th><th>Vx</th></tr></thead><tbody>" +
+    res.t.map((t, i) => `<tr><td>${fmt(t)}</td><td>${fmt(res.x_fit[i])}</td><td>${fmt(res.vx[i])}</td></tr>`).join("") +
+    "</tbody></table>";
+}
+
+$("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  $("error").textContent = "";
+  let input;
+  try { input = parseData($("data").value); } catch (e) { $("error").textContent = e.message; return; }
+  const body = { ...input };
+  const lam = $("smoothing").value.trim();
+  if (lam !== "") body.smoothing = Number(lam);
+  const n = $("npoints").value.trim();
+  if (n !== "") body.n_points = Number(n);
+  try {
+    const r = await fetch("/predict", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await r.json();
+    if (!r.ok) {
+      const d = data.detail;
+      throw new Error(Array.isArray(d) ? d.map((e) => e.msg).join("; ") : d || r.statusText);
+    }
+    last = { input, res: data };
+    render();
+  } catch (e) {
+    $("error").textContent = "Error: " + e.message;
+  }
+});
+$("gen").addEventListener("click", () => { generate(); $("form").requestSubmit(); });
+$("sample").addEventListener("change", () => { generate(); $("form").requestSubmit(); });
+window.addEventListener("resize", render);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+
+generate();
+$("form").requestSubmit();
+</script>
+</body>
+</html>
